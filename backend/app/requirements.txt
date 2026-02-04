@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pymongo
+python-multipart
+python-dotenv
+pydantic-settings
+google-generativeai>=0.8.0
+pymupdf
