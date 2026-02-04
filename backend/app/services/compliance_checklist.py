@@ -95,14 +95,15 @@ def get_checklist_for_jurisdiction(jurisdiction: str = None) -> str:
     Get relevant compliance checklist based on jurisdiction.
     
     Args:
-        jurisdiction: Jurisdiction name (Oman, Qatar, DIFC, KSA, UAE, Kuwait)
+        jurisdiction: Jurisdiction name (Oman, Qatar, DIFC, KSA, UAE, Kuwait) or None for general only
         
     Returns:
         Formatted checklist string
     """
     checklist = GENERAL_REQUIREMENTS + "\n\n"
     
-    if jurisdiction:
+    # Only add region-specific requirements if jurisdiction is specified (not None/General)
+    if jurisdiction and jurisdiction.upper() != "GENERAL":
         jurisdiction_upper = jurisdiction.upper()
         if "UAE" in jurisdiction_upper or jurisdiction_upper == "UAE":
             checklist += UAE_SCA_REQUIREMENTS + "\n\n"

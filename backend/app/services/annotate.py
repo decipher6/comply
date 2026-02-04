@@ -381,14 +381,11 @@ def process_pdf_page_by_page(
     ]
     color_index = 0
     
-    # Check if there are any actual issues to annotate
+    # Check if there are any actual violations to annotate (not just non-compliant items)
     has_issues = (
         len(analysis_result.missing_required_phrases) > 0 or
         any(len(cr.violations) > 0 or len(cr.missing_required) > 0 
-            for cr in analysis_result.checklist_results) or
-        any(not item.is_compliant and item.missing_details 
-            for cr in analysis_result.checklist_results 
-            for item in cr.checklist_items)
+            for cr in analysis_result.checklist_results)
     )
     
     # Only annotate if there are actual issues
@@ -480,10 +477,10 @@ def process_pdf_page_by_page(
                     if not first_rect:
                         continue
                     
-                    # Collect all issues for this jurisdiction
+                    # Collect ONLY actual violations - not every non-compliant item
                     issues_to_annotate = []
                     
-                    # Add missing required phrases from checklist result
+                    # ONLY add missing required phrases (actual violations)
                     for missing in checklist_result.missing_required:
                         issues_to_annotate.append({
                             "type": "missing_required",
@@ -492,42 +489,17 @@ def process_pdf_page_by_page(
                             "severity": "HIGH"
                         })
                     
-                    # Add violations
+                    # ONLY add actual violations
                     for violation in checklist_result.violations:
                         issues_to_annotate.append({
                             "type": "violation",
                             "text": violation,
-                            "reason": "Checklist violation",
+                            "reason": violation,  # Use violation text as reason
                             "severity": "HIGH"
                         })
                     
-                    # Add non-compliant items with details
-                    for item in checklist_result.checklist_items:
-                        if not item.is_compliant and item.missing_details:
-                            issues_to_annotate.append({
-                                "type": "non_compliant",
-                                "text": item.item,
-                                "reason": item.missing_details,
-                                "severity": "HIGH" if item.is_required else "MEDIUM"
-                            })
-                    
-                    # Also check analysis_result.missing_required_phrases for this jurisdiction
-                    for missing_phrase in analysis_result.missing_required_phrases:
-                        # Check if this missing phrase is relevant to this jurisdiction
-                        # (simple check - if jurisdiction matches or is general)
-                        if (detected.jurisdiction is None and missing_phrase.phrase) or \
-                           (detected.jurisdiction and any(
-                               detected.jurisdiction.value.lower() in missing_phrase.phrase.lower() or
-                               missing_phrase.phrase.lower() in detected.text.lower()
-                               for _ in [1])):
-                            # Avoid duplicates
-                            if not any(issue["text"] == missing_phrase.phrase for issue in issues_to_annotate):
-                                issues_to_annotate.append({
-                                    "type": "missing_required",
-                                    "text": missing_phrase.phrase,
-                                    "reason": missing_phrase.reason or "Required phrase not found",
-                                    "severity": "HIGH"
-                                })
+                    # DO NOT add comments for every non-compliant checklist item
+                    # Only add if it's a critical missing required element with specific text to highlight
                     
                     # Annotate each issue with highlights and collect comments
                     for issue in issues_to_annotate:
@@ -542,45 +514,65 @@ def process_pdf_page_by_page(
                         found_highlight = False
                         highlighted_text = ""
                         
-                        if issue["text"] and len(issue["text"]) > 10 and issue["text"].upper() != "MISSING":
-                            # Search for the issue text across all pages using improved search
-                            search_text = issue["text"].strip()
-                            all_instances = find_text_in_pdf(pdf_doc, search_text)
-                            
-                            # Filter instances for current page
+                        # Try to find and highlight the problematic text
+                        found_highlight = False
+                        highlighted_text = ""
+                        search_text_for_nav = None
+                        
+                        # For violations, try to find the actual problematic text in the disclaimer
+                        if issue["type"] == "violation" and issue["text"]:
+                            # Violation text might be a description, try to find related text in disclaimer
+                            # Look for key words from violation in the disclaimer text
+                            violation_words = [w for w in issue["text"].split() if len(w) > 4][:5]
+                            if violation_words:
+                                # Try to find sentences containing these words
+                                sentences = detected.text.split('.')
+                                for sentence in sentences:
+                                    if any(word.lower() in sentence.lower() for word in violation_words):
+                                        search_text_for_nav = sentence.strip()[:100]
+                                        break
+                        
+                        # For missing required, try to find where it should be or related text
+                        if issue["type"] == "missing_required":
+                            # Missing items - try to find related text that should contain this
+                            if issue["text"] and len(issue["text"]) > 10:
+                                search_text_for_nav = issue["text"][:100]
+                        
+                        # Try to find and highlight text in PDF
+                        if search_text_for_nav and len(search_text_for_nav) > 10:
+                            all_instances = find_text_in_pdf(pdf_doc, search_text_for_nav)
                             instances = [inst[1] for inst in all_instances if inst[0] == page_num]
                             
                             if instances:
-                                # Highlight ALL occurrences of this text on the page
+                                # Highlight ALL occurrences on this page
                                 for highlight_rect in instances:
                                     highlight = page.add_highlight_annot(highlight_rect)
-                                    # Set color - highlights use fill, not stroke
+                                    # Use proper highlight color (RGB tuple)
                                     highlight.set_colors(stroke=highlight_color)
-                                    highlight.set_info(content=issue["reason"])
-                                    highlight.set_opacity(0.4)
+                                    highlight.set_info(content=issue["reason"][:200])
+                                    highlight.set_opacity(0.5)  # More visible
                                     highlight.update()
                                 
-                                # Use the first instance for getting text
                                 highlight_rect = instances[0]
-                                
-                                # Get the highlighted text
                                 try:
                                     highlighted_text = page.get_textbox(highlight_rect)[:200]
                                 except:
-                                    highlighted_text = issue["text"][:200]
+                                    highlighted_text = search_text_for_nav[:200]
                                 
                                 found_highlight = True
                         
-                        # Add comment to list
-                        comment = {
-                            "page": page_num + 1,
-                            "text": issue["reason"],
-                            "type": issue["type"].replace("_", " ").title(),
-                            "color": color_hex,
-                            "highlighted_text": highlighted_text or (issue["text"][:200] if issue["text"] else ""),
-                            "jurisdiction": jur_name
-                        }
-                        comments.append(comment)
+                        # ONLY add comment if we found something to highlight OR it's a critical missing element
+                        if found_highlight or (issue["type"] == "missing_required" and issue["severity"] == "HIGH"):
+                            comment = {
+                                "page": page_num + 1,
+                                "text": issue["reason"][:300],  # Limit length
+                                "type": issue["type"].replace("_", " ").title(),
+                                "color": color_hex,
+                                "highlighted_text": highlighted_text or (issue["text"][:200] if issue["text"] else ""),
+                                "jurisdiction": jur_name,
+                                "search_text": search_text_for_nav[:100] if search_text_for_nav else None
+                            }
+                            comments.append(comment)
                     
                     # No LLM suggestions - only use checklist results
     

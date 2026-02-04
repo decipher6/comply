@@ -421,7 +421,15 @@ def check_all_disclaimers_compliance(
         disclaimers_section = ""
         for idx, detected in enumerate(all_detected):
             jur_name = detected.jurisdiction.value if detected.jurisdiction else "General"
-            checklist = get_checklist_for_jurisdiction(jur_name)
+            
+            # Only apply region-specific checklist if disclaimer has a specific jurisdiction
+            if detected.jurisdiction is None or jur_name == "General":
+                # General disclaimer - only general requirements
+                checklist = get_checklist_for_jurisdiction(None)
+            else:
+                # Region-specific disclaimer - general + region-specific requirements
+                checklist = get_checklist_for_jurisdiction(jur_name)
+            
             disclaimers_section += f"""
 DISCLAIMER {idx + 1} - {jur_name} JURISDICTION:
 Checklist for {jur_name}:
@@ -433,17 +441,22 @@ Disclaimer Text:
 ---
 """
         
-        prompt = f"""You are a compliance analyst checking multiple disclaimers against regulatory requirements. Be DETERMINISTIC and ACCURATE.
+        prompt = f"""You are a compliance analyst checking multiple disclaimers against regulatory requirements. Be STRICT and CONSERVATIVE.
 
 {disclaimers_section}
 
-TASK:
-For EACH disclaimer above, check it against its relevant checklist (General requirements + jurisdiction-specific requirements).
+CRITICAL RULES:
+1. ONLY flag actual violations - missing required elements (marked with *) or false/misleading statements
+2. If a disclaimer meets the checklist requirements, mark ALL items as compliant
+3. Do NOT flag minor wording variations or stylistic differences
+4. Do NOT create violations that aren't explicitly in the checklist
+
+For EACH disclaimer above, check it against its relevant checklist.
 
 For each disclaimer, provide:
-1. Checklist items status (compliant/not compliant for each item)
-2. Missing required elements
-3. Violations
+1. Checklist items status (compliant/not compliant) - be generous, only mark non-compliant if clearly violating
+2. Missing required elements (ONLY items marked with * in checklist that are actually missing)
+3. Violations (ONLY false/misleading statements or clear violations mentioned in checklist)
 
 Respond in this EXACT JSON format:
 {{
