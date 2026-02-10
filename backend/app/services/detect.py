@@ -32,9 +32,10 @@ def detect_jurisdictions_and_disclaimers(pdf_bytes: bytes) -> Tuple[List[str], L
         raise ValueError("GEMINI_API_KEY is required. Please set it in your .env file.")
     
     initialize_gemini()
+    # Model initialization - generation config passed to generate_content
     model = genai.GenerativeModel('gemini-3-flash-preview')
     
-    prompt = """You are analyzing a marketing material document for financial products. Your task is:
+    prompt = """You are analyzing a marketing material document for financial products. This is a LEGAL matter - be DETERMINISTIC and THOROUGH.
 
 STEP 1: DETECT JURISDICTIONS
 Identify which jurisdictions are mentioned in this document. Look for:
@@ -46,13 +47,12 @@ Identify which jurisdictions are mentioned in this document. Look for:
 - Qatar
 
 STEP 2: EXTRACT DISCLAIMERS
-For EACH jurisdiction detected, extract the complete disclaimer text that applies to that jurisdiction.
+For EACH jurisdiction detected, extract the COMPLETE disclaimer text that applies to that jurisdiction.
 Also extract any general disclaimers (not specific to any jurisdiction).
 
 IMPORTANT:
-- Read through ALL pages of the document systematically
-- Extract the COMPLETE text of each disclaimer section
-- Do NOT truncate or summarize - include ALL text from start to end
+- Read through ALL pages of the document systematically - do NOT skip any pages
+- Extract the COMPLETE text of each disclaimer section - do NOT truncate
 - If a disclaimer spans multiple pages, extract ALL of it
 - Look for sections that start with phrases like:
   * "For residents of the United Arab Emirates (the 'UAE')"
@@ -62,6 +62,22 @@ IMPORTANT:
   * "For residents of the Kingdom of Saudi Arabia"
   * "For residents of the Dubai International Financial Centre ('DIFC')"
 - Also look for general disclaimers that apply to all jurisdictions
+
+STEP 3: SCAN ENTIRE DOCUMENT FOR VIOLATIONS
+Scan EVERY page of the document (not just disclaimers) for compliance violations:
+- Promises of specific returns/gains (e.g., "100% gain", "guaranteed return", "promise of X%", "we guarantee X%", "guaranteed profit")
+- Forecasts of future prices or returns without proper disclaimers
+- False or misleading statements
+- Unfair promises or guarantees
+- Missing required risk warnings
+- Missing past performance disclaimers (if past performance is mentioned)
+
+CRITICAL FOR LARGE DOCUMENTS:
+- If this document has 50+ pages, you MUST read through ALL pages systematically
+- Do NOT skip any pages, even if they seem irrelevant
+- Check headers, footers, charts, tables, appendices - EVERYTHING
+- Extract disclaimers even if they span multiple pages
+- Flag violations found on ANY page, not just the first few pages
 
 Respond in this EXACT JSON format:
 {
@@ -79,16 +95,24 @@ Respond in this EXACT JSON format:
       "jurisdiction": "General",
       "disclaimer_text": "complete full text of general disclaimer (if any)"
     }
+  ],
+  "document_violations": [
+    {
+      "violation_text": "exact text from document that violates (e.g., '100% gain', 'guaranteed return')",
+      "violation_type": "promise_of_return" or "false_statement" or "misleading_forecast",
+      "page_reference": "page number or location if known"
+    }
   ]
 }
 
 If no disclaimers found, return:
 {
   "jurisdictions_detected": [],
-  "disclaimers": []
+  "disclaimers": [],
+  "document_violations": []
 }
 
-Be extremely thorough - extract every disclaimer completely."""
+Extract all disclaimers completely. Flag violations."""
     
     # Save PDF bytes to temporary file for Gemini upload
     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -100,8 +124,17 @@ Be extremely thorough - extract every disclaimer completely."""
         uploaded_file = genai.upload_file(path=tmp_file_path, mime_type="application/pdf")
         
         try:
-            # Generate content with PDF
-            response = model.generate_content([prompt, uploaded_file])
+            # Generate content with PDF - use deterministic generation
+            # For large PDFs, increase output tokens and ensure all pages are processed
+            response = model.generate_content(
+                [prompt, uploaded_file],
+                generation_config={
+                    "temperature": 0.0,
+                    "top_p": 0.95,
+                    "top_k": 40,
+                    "max_output_tokens": 8192  # Increased for large PDFs (50+ pages)
+                }
+            )
             response_text = response.text
             
             # Debug: print response for troubleshooting
@@ -160,6 +193,21 @@ Be extremely thorough - extract every disclaimer completely."""
             jurisdiction=detected_jurisdiction,
             confidence=0.9
         ))
+    
+    # Extract document violations (promises of returns/gains found anywhere in document)
+    document_violations = data.get("document_violations", [])
+    
+    # If violations found in document, add them to a general disclaimer for analysis
+    if document_violations:
+        violation_texts = [v.get("violation_text", "") for v in document_violations if v.get("violation_text")]
+        if violation_texts:
+            # Add a special disclaimer entry for document-wide violations
+            violation_summary = "Document contains: " + "; ".join(violation_texts[:5])  # Limit to first 5
+            disclaimers.append(DetectedDisclaimer(
+                text=violation_summary,
+                jurisdiction=None,  # General - applies to all
+                confidence=0.95
+            ))
     
     return jurisdictions_detected, disclaimers
 

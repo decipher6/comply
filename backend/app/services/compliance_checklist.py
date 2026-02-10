@@ -17,6 +17,8 @@ There are several general requirements for the contents of all Marketing Materia
 - Where inclusion of a specific statement is required (illustrated by an * above and throughout this document), such statement is included within Greenstone's standard disclaimers. Where alternative disclaimers are utilised or amendments are made to Greenstone's standard disclaimers at the request of the Fund Manager Partner, care must be taken to ensure that such disclaimer language fulfils the above listed requirements. Disclaimers for inclusion in Marketing Materials must be approved by Compliance and the FMP.
 - Marketing Materials should not include language that presents as an opinion, representation or recommendation of Greenstone or any of its employees.
 """
+# Red-flag phrases that always indicate violations when present in materials (for prompts)
+RED_FLAG_HINT = "guaranteed return/profit/gain; specific % return (e.g. 10% return); promise of return/profit; forecast of future price; false or misleading statements."
 
 PRE_MARKETING_REQUIREMENTS = """
 REQUIREMENTS FOR PRE-MARKETING MATERIALS - (APPLICABLE TO ALL COUNTRIES)
@@ -115,6 +117,20 @@ def get_checklist_for_jurisdiction(jurisdiction: str = None) -> str:
             checklist += KUWAIT_REQUIREMENTS + "\n\n"
     
     return checklist
+
+
+def is_prohibition_item(item_text: str) -> bool:
+    """
+    True if this checklist item is a prohibition (must not / should not).
+    These must be checked by the LLM to catch red flags like guaranteed returns, misleading statements.
+    """
+    t = item_text.upper()
+    return (
+        "MUST NOT" in t or "SHOULD NOT" in t or
+        "MUST NOT INCLUDE" in t or "MUST NOT PUBLISH" in t or "MUST NOT DISCLOSE" in t or
+        "MUST NOT DESCRIBE" in t or "MUST NOT FORECAST" in t or "MUST NOT CONTAIN" in t or
+        "DO NOT" in t or "NOT INCLUDE" in t
+    )
 
 
 def parse_checklist_items(checklist_text: str) -> List[tuple[str, str, bool]]:

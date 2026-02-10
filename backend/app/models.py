@@ -1,6 +1,6 @@
 # app/models.py
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Dict, List, Optional
 from enum import Enum
 from datetime import datetime
 
@@ -45,6 +45,7 @@ class MissingPhrase(BaseModel):
     phrase: str
     required: bool
     reason: Optional[str] = None
+    exact_highlight_text: Optional[str] = None  # Exact text from document to highlight (where to add or related line)
 
 
 class ChecklistItem(BaseModel):
@@ -54,6 +55,13 @@ class ChecklistItem(BaseModel):
     is_required: bool  # Marked with * in checklist
     is_compliant: bool  # Whether this item is met
     missing_details: Optional[str] = None  # Details if not compliant
+    exact_highlight_text: Optional[str] = None  # Exact quote from document to highlight for this item
+
+
+class ViolationDetail(BaseModel):
+    """A violation with optional exact text to highlight in the PDF."""
+    violation: str
+    exact_text: Optional[str] = None  # Exact quote from document that violates (for highlighting)
 
 
 class ComparisonResult(BaseModel):
@@ -68,7 +76,27 @@ class ChecklistResult(BaseModel):
     jurisdiction: Optional[Jurisdiction] = None
     checklist_items: List[ChecklistItem] = Field(default_factory=list)
     missing_required: List[MissingPhrase] = Field(default_factory=list)
-    violations: List[str] = Field(default_factory=list)
+    violations: List[str] = Field(default_factory=list)  # Kept for backward compat
+    violation_details: List[ViolationDetail] = Field(default_factory=list)  # Violation + exact text to highlight
+
+
+class FootnoteIssue(BaseModel):
+    """A footnote reference or formatting issue."""
+    page: int
+    issue_type: str  # e.g. footnote_reference_missing
+    message: str
+    reference: Optional[str] = None
+    bbox: Optional[List[float]] = None  # [x0, y0, x1, y1] for highlighting the problematic ref or footnote text
+
+
+class FormattingIssue(BaseModel):
+    """Unusual colored text (red edit remnants) or existing highlight in the PDF."""
+    page: int
+    issue_type: str  # unusual_color | existing_highlight
+    message: str
+    text: Optional[str] = None
+    color_hex: Optional[str] = None
+    bbox: Optional[List[float]] = None  # [x0, y0, x1, y1] for highlighting red text
 
 
 class AnalysisResult(BaseModel):
@@ -83,6 +111,13 @@ class AnalysisResult(BaseModel):
     closest_match_id: Optional[str] = None
     explanation: str
     llm_suggestions: Optional[str] = None
+    summary_blurb: Optional[str] = None  # Short 1–2 sentence summary for UI (why OK / why not)
+    # Universal footnotes for the entire document (one section, or none): { "1": "text", "2": "text" }
+    footnotes: Optional[Dict[str, str]] = None
+    # ref -> {"page": int, "bbox": [x0,y0,x1,y1]} for highlighting footnote definitions that have issues
+    footnotes_locations: Optional[Dict[str, Dict]] = None
+    footnote_issues: List[FootnoteIssue] = Field(default_factory=list)
+    formatting_issues: List[FormattingIssue] = Field(default_factory=list)  # Unusual color, existing highlights
 
 
 class AnalysisRequest(BaseModel):

@@ -123,7 +123,11 @@ Be accurate and conservative - only flag real compliance issues."""
         try:
             uploaded_file = genai.upload_file(path=tmp_file_path, mime_type="application/pdf")
             try:
-                response = model.generate_content([prompt, uploaded_file])
+                # Use deterministic generation with temperature=0
+                response = model.generate_content(
+                    [prompt, uploaded_file],
+                    generation_config={"temperature": 0.0, "top_p": 0.95, "top_k": 40}
+                )
                 response_text = response.text
             finally:
                 try:

@@ -181,6 +181,16 @@
                                         margin-bottom: 10px;
                                         border-radius: 4px;
                                         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                                        cursor: pointer;
+                                        transition: background-color 0.2s;
+                                        user-select: none;
+                                    }
+                                    .comment-item:hover {
+                                        background: #e9ecef;
+                                        box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+                                    }
+                                    .comment-item:active {
+                                        background: #dee2e6;
                                     }
                                     .comment-header {
                                         display: flex;
@@ -237,10 +247,18 @@
                                         `}
                                     </div>
                                     <div class="comments-panel">
+                                        <div class="summary-blurb" style="padding: 12px 15px; background: #fff; border-bottom: 1px solid #eee; font-size: 13px; line-height: 1.5; color: #333;">
+                                            ${escapeHtml(data.result.summary_blurb || (data.result.is_approved ? 'This document meets the checklist requirements.' : 'This document was not approved. See comments for details.'))}
+                                        </div>
                                         <div class="comments-header">COMMENTS (${comments.length})</div>
                                         <div class="comments-list">
-                                            ${comments.length > 0 ? comments.map((comment, idx) => `
-                                                <div class="comment-item" style="border-left-color: ${comment.color}">
+                                            ${comments.length > 0 ? comments.map((comment, idx) => {
+                                                const searchText = escapeHtml(comment.search_text || comment.highlighted_text || '').replace(/'/g, "\\'");
+                                                return `
+                                                <div class="comment-item" 
+                                                     style="border-left-color: ${comment.color}"
+                                                     onclick="navigateToHighlight(${comment.page}, '${searchText}')"
+                                                     data-page="${comment.page}">
                                                     <div class="comment-header">
                                                         <div class="comment-color-dot" style="background-color: ${comment.color}"></div>
                                                         <span class="comment-type">${comment.type}</span>
@@ -254,13 +272,47 @@
                                                         <div class="comment-jurisdiction">${comment.jurisdiction}</div>
                                                     ` : ''}
                                                 </div>
-                                            `).join('') : '<div style="padding: 20px; text-align: center; color: #999;">No comments</div>'}
+                                            `;
+                                            }).join('') : '<div style="padding: 20px; text-align: center; color: #999;">No comments</div>'}
                                         </div>
                                     </div>
                                 </div>
                             </body>
                         </html>
                     `);
+                    
+                    // Add navigation function after document is written
+                    resultsWindow.navigateToHighlight = function(pageNum, searchText) {
+                        const iframe = resultsWindow.document.querySelector('iframe');
+                        if (!iframe || !iframe.contentWindow) return;
+                        try {
+                            const pdfViewer = iframe.contentWindow.PDFViewerApplication;
+                            if (pdfViewer) {
+                                pdfViewer.page = pageNum - 1;
+                                if (searchText && searchText.length > 10) {
+                                    setTimeout(function() {
+                                        const findController = pdfViewer.findController;
+                                        if (findController) {
+                                            findController.executeCommand('find', {
+                                                query: searchText.substring(0, 50),
+                                                highlightAll: true,
+                                                caseSensitive: false
+                                            });
+                                        }
+                                    }, 500);
+                                }
+                            } else {
+                                iframe.contentWindow.scrollTo(0, 0);
+                                const src = iframe.src.split('#')[0];
+                                iframe.src = src + '#page=' + pageNum;
+                            }
+                        } catch (e) {
+                            console.error('Navigation error:', e);
+                            const src = iframe.src.split('#')[0];
+                            iframe.src = src + '#page=' + pageNum;
+                        }
+                    };
+                    
                     resultsWindow.document.close();
 
                 } catch (err) {

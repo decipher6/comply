@@ -53,13 +53,14 @@ async def analyze_pdf(
         if primary_detected:
             comparison_results = compare_with_approved(primary_detected, jurisdiction)
         
-        # Generate analysis result (applies relevant checklist to each jurisdiction)
+        # Generate analysis result (applies relevant checklist to each jurisdiction and entire document)
         analysis_result = generate_analysis_result(
             primary_detected,
             all_detected,
             jurisdictions_detected,
             comparison_results,
-            jurisdiction.value if jurisdiction else None
+            jurisdiction.value if jurisdiction else None,
+            pdf_bytes  # Pass PDF bytes for entire document checking
         )
         
         # Generate annotated PDF and collect comments
