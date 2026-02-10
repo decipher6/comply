@@ -2,13 +2,11 @@
 from pymongo import MongoClient
 from app.config import settings
 
+# Defer ping to avoid failing app load on Vercel when DB is unreachable at cold start
 try:
     client = MongoClient(settings.MONGO_URI, serverSelectionTimeoutMS=5000)
-    # Test connection
-    client.admin.command('ping')
 except Exception as e:
-    print(f"Warning: Could not connect to MongoDB: {e}")
-    print("The application will start but database operations may fail.")
+    print(f"Warning: MongoClient init: {e}")
     client = MongoClient(settings.MONGO_URI)
 
 db = client[settings.DB_NAME]

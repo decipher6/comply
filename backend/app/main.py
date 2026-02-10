@@ -38,11 +38,11 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint. Returns 200 so Vercel/deploy checks pass; DB status in body."""
     from app.database import client
     try:
-        # Test MongoDB connection
         client.admin.command('ping')
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
-        return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
+        # Return 200 so load balancers don't treat as 500; details in body
+        return {"status": "unhealthy", "database": "disconnected", "error": (str(e)[:200] or "unknown")}
