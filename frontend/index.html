@@ -53,6 +53,8 @@
     <script type="text/babel">
         const { useState } = React;
 
+        const API_BASE_URL = 'https://comply1-pink.vercel.app';
+
         function App() {
             const [file, setFile] = useState(null);
             const [loading, setLoading] = useState(false);
@@ -82,7 +84,7 @@
                     const formData = new FormData();
                     formData.append('file', file);
 
-                    const response = await fetch('http://localhost:8000/api/analyze/', {
+                    const response = await fetch(`${API_BASE_URL}/api/analyze/`, {
                         method: 'POST',
                         body: formData,
                     });

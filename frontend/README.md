@@ -6,7 +6,7 @@ Basic React UI for testing the Disclaimer Checker API.
 
 Simply open `index.html` in your web browser. No build step required.
 
-Make sure the backend is running on `http://localhost:8000` before using the UI.
+The UI uses the hosted API at `https://comply1-pink.vercel.app`. For local development, change `API_BASE_URL` in `index.html` to `http://localhost:8000`.
 
 ## Features
 
