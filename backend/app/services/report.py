@@ -1445,17 +1445,17 @@ def generate_analysis_result(
     Returns:
         Complete AnalysisResult object
     """
-    # 1) Fast red-flag scan (no LLM). If we find violations, we do NOT run chunked doc LLM (each page passed to LLM at most once).
-    red_flag_details: List[ViolationDetail] = []
-    if pdf_bytes:
-        red_flag_details = deduplicate_violation_details(scan_document_red_flags(pdf_bytes))
-
-    # 2) Chunked document compliance only when regex found nothing (avoid sending same pages to LLM twice)
+    # 1) LLM chunked document compliance first (so we always see LLM output)
     document_checklist_results: List[ChecklistResult] = []
-    if pdf_bytes and not red_flag_details:
+    if pdf_bytes:
         document_checklist_results = check_entire_document_compliance_chunked(
             pdf_bytes, jurisdictions_detected, jurisdiction
         )
+
+    # 2) Red-flag scan (regex); merge into document result so both LLM and red-flag appear and get highlighted
+    red_flag_details: List[ViolationDetail] = []
+    if pdf_bytes:
+        red_flag_details = deduplicate_violation_details(scan_document_red_flags(pdf_bytes))
 
     disclaimer_checklist_results = check_all_disclaimers_compliance_multi_call(all_detected, jurisdiction)
 
