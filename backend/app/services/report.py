@@ -1551,11 +1551,13 @@ def generate_analysis_result(
     formatting_issues_list = []
     if pdf_bytes:
         from app.services.footnotes import run_footnote_and_formatting_checks, find_ref_bbox_on_page
-        _py_footnotes, footnote_locations, _fn_issues_python, color_issues, highlight_issues = run_footnote_and_formatting_checks(pdf_bytes)
-        # Single LLM call with PDF (like checklist): get footnote section + all refs; no fallbacks
+        # Formatting only (unusual color, existing highlights); no Python footnote extraction
+        _, _, _, color_issues, highlight_issues = run_footnote_and_formatting_checks(pdf_bytes)
+
+        # Footnotes: LLM only — extract definitions and refs, then validate refs against definitions
         footnotes_dict, llm_refs = get_footnotes_and_references_from_llm(pdf_bytes)
         has_footnote_section = bool(footnotes_dict)
-        footnote_issues_list = []
+        footnote_locations = {}  # LLM does not return definition locations
         for item in llm_refs:
             page_no = item.get("page", 1)
             ref_text = (item.get("ref_text") or "").strip()
@@ -1564,7 +1566,6 @@ def generate_analysis_result(
             refs_split = [s.strip() for s in ref_text.split(",") if s.strip()]
             for ref in refs_split:
                 if has_footnote_section:
-                    # Document has a footnote section: only flag refs that don't have a definition
                     if ref not in footnotes_dict:
                         bbox = find_ref_bbox_on_page(pdf_bytes, page_no, ref) or find_ref_bbox_on_page(pdf_bytes, page_no, ref_text)
                         footnote_issues_list.append(FootnoteIssue(
@@ -1575,11 +1576,10 @@ def generate_analysis_result(
                             bbox=bbox,
                         ))
                 else:
-                    # No footnote section: flag only if ref looks like a footnote ref (not e.g. year or big number)
                     if ref.isdigit() and len(ref) > 3:
-                        continue  # e.g. 2024, 12345 - likely not a footnote ref
+                        continue
                     if not (ref.isdigit() or ref.strip("*") == ""):
-                        continue  # allow digits and asterisk(s) only
+                        continue
                     bbox = find_ref_bbox_on_page(pdf_bytes, page_no, ref) or find_ref_bbox_on_page(pdf_bytes, page_no, ref_text)
                     footnote_issues_list.append(FootnoteIssue(
                         page=page_no,
@@ -1588,6 +1588,7 @@ def generate_analysis_result(
                         reference=ref,
                         bbox=bbox,
                     ))
+
         # LLM review of footnote content (compliance, consistency, wording)
         if footnotes_dict:
             llm_footnote_issues = get_footnote_issues_from_llm(footnotes_dict, jurisdictions_detected)

@@ -89,6 +89,27 @@ def _span_is_footnote_ref(span_text: str) -> Optional[str]:
     return None
 
 
+def _span_footnote_refs(span_text: str) -> List[str]:
+    """
+    Extract footnote reference(s) from a span: single ref (e.g. "11") or comma-separated (e.g. "11,12").
+    Returns a list of reference strings to validate against the footnote section.
+    """
+    t = span_text.strip()
+    if not t:
+        return []
+    # Comma-separated refs (e.g. "11,12" in one superscript span)
+    parts = [p.strip() for p in t.split(",") if p.strip()]
+    refs: List[str] = []
+    for p in parts:
+        if re.fullmatch(r"\d+", p) or re.fullmatch(r"\*+", p):
+            refs.append(p)
+    if refs:
+        return refs
+    # Single ref in whole span
+    single = _span_is_footnote_ref(t)
+    return [single] if single else []
+
+
 def check_footnote_references(
     pdf_bytes: bytes,
     footnotes: Dict[str, str],
@@ -124,21 +145,20 @@ def check_footnote_references(
                 for line in block.get("lines", []):
                     for span in line.get("spans", []):
                         text = span.get("text", "")
-                        ref = _span_is_footnote_ref(text)
-                        if ref is None:
-                            continue
-                        if ref in seen_refs_this_page:
-                            continue
-                        seen_refs_this_page.add(ref)
-                        if ref not in footnotes:
-                            span_bbox = span.get("bbox")
-                            issues.append({
-                                "page": page_no,
-                                "issue_type": "footnote_reference_missing",
-                                "message": f"Footnote reference '{ref}' has no matching footnote in this document.",
-                                "reference": ref,
-                                "bbox": list(span_bbox) if span_bbox else None,
-                            })
+                        refs_in_span = _span_footnote_refs(text)
+                        span_bbox = span.get("bbox")
+                        for ref in refs_in_span:
+                            if ref in seen_refs_this_page:
+                                continue
+                            seen_refs_this_page.add(ref)
+                            if ref not in footnotes:
+                                issues.append({
+                                    "page": page_no,
+                                    "issue_type": "footnote_reference_missing",
+                                    "message": f"Footnote reference '{ref}' has no matching footnote in this document.",
+                                    "reference": ref,
+                                    "bbox": list(span_bbox) if span_bbox else None,
+                                })
         doc.close()
     except Exception:
         pass
