@@ -1266,6 +1266,70 @@ Respond in this EXACT JSON format:
         return checklist_results
 
 
+def get_footnote_section_from_llm(pdf_bytes: bytes) -> Dict[str, str]:
+    """
+    Use the LLM to extract the footnote section from the document (like pasting the doc into chat).
+    Returns a dict mapping each footnote label (e.g. "1", "2", "*") to its full definition text.
+    If there is no footnote section, returns {}.
+    """
+    if not settings.GEMINI_API_KEY or not pdf_bytes:
+        return {}
+    import os
+    import tempfile
+    prompt = """You are extracting the FOOTNOTE SECTION from this PDF document.
+
+TASK: Find the footnote section (usually at the end of the document or bottom of pages) where footnotes are DEFINED. Look for:
+- Numbered lines like "1. ...", "2. ...", "11. ..." or "1) ...", "2) ..."
+- Asterisk footnotes like "* ..." or "** ..."
+- Any block of text that clearly lists footnote definitions
+
+For each footnote you find, record its LABEL (the number or asterisk(s)) and the FULL TEXT of that footnote definition.
+If the document has NO footnote section at all, return an empty object.
+
+Respond with ONLY a JSON object (no markdown, no explanation). Format:
+{"1": "full text of footnote 1 here", "2": "full text of footnote 2 here", "*": "full text of asterisk footnote"}
+Use the exact label as key (e.g. "1", "2", "11", "*"). If no footnotes: {}}"""
+
+    try:
+        initialize_gemini()
+        model = genai.GenerativeModel('gemini-3-flash-preview')
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(pdf_bytes)
+            tmp_file_path = tmp_file.name
+        try:
+            uploaded_file = genai.upload_file(path=tmp_file_path, mime_type="application/pdf")
+            try:
+                response = model.generate_content(
+                    [prompt, uploaded_file],
+                    generation_config={"temperature": 0.0, "top_p": 0.95, "top_k": 40, "max_output_tokens": 8192}
+                )
+                raw = (response.text or "").strip()
+            finally:
+                try:
+                    genai.delete_file(uploaded_file.name)
+                except Exception:
+                    pass
+        finally:
+            if os.path.exists(tmp_file_path):
+                try:
+                    os.unlink(tmp_file_path)
+                except Exception:
+                    pass
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for k, v in data.items():
+            if k and v is not None and isinstance(v, str) and v.strip():
+                out[str(k).strip()] = v.strip()
+        return out
+    except Exception as e:
+        print(f"LLM footnote section extraction error: {e}")
+        return {}
+
+
 def get_footnote_references_from_llm(pdf_bytes: bytes) -> List[Dict]:
     """
     Ask the LLM to identify footnote REFERENCES in the body only. Refs are validated later
@@ -1540,8 +1604,11 @@ def generate_analysis_result(
     formatting_issues_list = []
     if pdf_bytes:
         from app.services.footnotes import run_footnote_and_formatting_checks, find_ref_bbox_on_page
-        footnotes_dict, footnote_locations, _fn_issues_python, color_issues, highlight_issues = run_footnote_and_formatting_checks(pdf_bytes)
-        # Find footnote references via LLM, then check against the document's footnote section (if any)
+        _py_footnotes, footnote_locations, _fn_issues_python, color_issues, highlight_issues = run_footnote_and_formatting_checks(pdf_bytes)
+        # Use LLM to extract footnote section and references (like putting doc in chat), then validate
+        footnotes_dict = get_footnote_section_from_llm(pdf_bytes)
+        if not footnotes_dict and _py_footnotes:
+            footnotes_dict = _py_footnotes  # fallback to Python extraction if LLM returns empty
         has_footnote_section = bool(footnotes_dict)
         llm_refs = get_footnote_references_from_llm(pdf_bytes)
         footnote_issues_list = []
