@@ -1342,22 +1342,18 @@ def get_footnote_references_from_llm(pdf_bytes: bytes) -> List[Dict]:
         return []
     import os
     import tempfile
-    prompt = """You are analyzing a PDF for footnote REFERENCES in the body text only (numbers or asterisks that point to footnotes). The document may or may not have a footnote section at the bottom.
+    prompt = """You are analyzing a PDF document. The full PDF is attached so you can read every page.
 
-STRICT RULES - only report when you are confident it is a footnote reference:
-- Must look like a REFERENCE: superscript, or noticeably smaller font than the main text, often immediately after a word or figure.
-- Strong signals: comma-separated numbers (e.g. "11,12", "1,2,3") or asterisk(s) (*) in superscript/small style.
-- Single small numbers (e.g. "1", "12") only if they are clearly superscript/small and attached to preceding text as a reference, not standalone data.
+TASK: Find every footnote REFERENCE in the body (numbers or asterisks that point to footnotes). References often appear:
+- As SUPerscript (e.g. small raised "11,12" or Unicode superscript ¹¹,¹² after text like "Gross IRR / Net IRR" or "Gross MOIC / Net MOIC").
+- In tables: immediately after a metric name (e.g. "Net IRR¹¹,¹²" or "Net MOIC¹¹,¹²") – these ARE footnote refs; report them.
+- Comma-separated (e.g. "11,12", "1,2,3") or single numbers/asterisks in smaller or superscript style.
 
-Do NOT report (these are NOT footnote references):
-- Percentages or multipliers (e.g. 28%, 25%, 1.6x, 1.4x).
-- Numbers in tables that are data (values, amounts, dates).
-- List numbers (1. 2. 3.) or section numbers ("Section 1", "page 11").
-- Standalone numbers in narrative that are part of the sentence (years, counts, etc.).
-- The footnote DEFINITIONS at the bottom of the page or end of document (only report references in the main body).
-When in doubt, do NOT report. Prefer missing a ref over flagging something that is not a ref.
+Report refs as NORMAL digits in ref_text (e.g. "11,12" not "¹¹,¹²") so they can be validated. Include refs that appear as Unicode superscript digits (¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ⁰) – report them as "11", "12", etc.
 
-For each reference you find, report PAGE (1-based) and the EXACT reference text as it appears (e.g. "11,12", "3", "*").
+Do NOT report: percentages (28%), multipliers (1.6x), list/section numbers, years, or the footnote definitions at the bottom. Only report in-body references.
+
+For each reference, report PAGE (1-based) and ref_text as normal digits (e.g. "11,12").
 Respond with ONLY this JSON (no markdown):
 {"references": [{"page": 1, "ref_text": "11,12"}, ...]}
 If no footnote references found: {"references": []}}"""
@@ -1611,6 +1607,14 @@ def generate_analysis_result(
             footnotes_dict = _py_footnotes  # fallback to Python extraction if LLM returns empty
         has_footnote_section = bool(footnotes_dict)
         llm_refs = get_footnote_references_from_llm(pdf_bytes)
+        from app.services.footnotes import find_superscript_footnote_refs_in_pdf
+        python_refs = find_superscript_footnote_refs_in_pdf(pdf_bytes)
+        seen_ref_key = {(r["page"], r["ref_text"]) for r in llm_refs}
+        for r in python_refs:
+            key = (r["page"], r["ref_text"])
+            if key not in seen_ref_key:
+                seen_ref_key.add(key)
+                llm_refs = llm_refs + [r]
         footnote_issues_list = []
         for item in llm_refs:
             page_no = item.get("page", 1)
