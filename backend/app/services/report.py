@@ -1266,29 +1266,40 @@ Respond in this EXACT JSON format:
         return checklist_results
 
 
-def get_footnote_section_from_llm(pdf_bytes: bytes) -> Dict[str, str]:
+def get_footnotes_and_references_from_llm(pdf_bytes: bytes) -> Tuple[Dict[str, str], List[Dict]]:
     """
-    Use the LLM to extract the footnote section from the document (like pasting the doc into chat).
-    Returns a dict mapping each footnote label (e.g. "1", "2", "*") to its full definition text.
-    If there is no footnote section, returns {}.
+    Send the PDF to the LLM once (same as checklist validation). Get back:
+    (1) The footnote section: which footnote labels exist and their full text.
+    (2) Every footnote reference in the body (superscript/small numbers like 11, 12, 11,12) with page.
+    No Python fallbacks - only what the LLM returns.
+    Returns:
+        (footnotes_dict, references_list) e.g. ({"1": "text", "11": "text"}, [{"page": 5, "ref_text": "11,12"}, ...])
     """
     if not settings.GEMINI_API_KEY or not pdf_bytes:
-        return {}
+        return {}, []
     import os
     import tempfile
-    prompt = """You are extracting the FOOTNOTE SECTION from this PDF document.
+    prompt = """You are analyzing this PDF document. Do TWO things and respond with a single JSON object.
 
-TASK: Find the footnote section (usually at the end of the document or bottom of pages) where footnotes are DEFINED. Look for:
-- Numbered lines like "1. ...", "2. ...", "11. ..." or "1) ...", "2) ..."
-- Asterisk footnotes like "* ..." or "** ..."
-- Any block of text that clearly lists footnote definitions
+PART 1 - FOOTNOTE SECTION (definitions):
+Find the footnote section (usually at the end or bottom of pages) where footnotes are DEFINED.
+For each footnote, record its LABEL (the number or asterisk, e.g. "1", "2", "11", "*") and the FULL TEXT of that footnote.
+Put them in "footnotes" as an object: {"1": "full text of footnote 1", "2": "full text of footnote 2", ...}.
+If the document has NO footnote section at all, use "footnotes": {}.
 
-For each footnote you find, record its LABEL (the number or asterisk(s)) and the FULL TEXT of that footnote definition.
-If the document has NO footnote section at all, return an empty object.
+PART 2 - FOOTNOTE REFERENCES (in the body):
+List EVERY footnote reference you see in the main body of the document. These are superscript or smaller-sized numbers/asterisks that point to footnotes, e.g.:
+- Next to text like "Gross IRR / Net IRR¹¹,¹²" or "Net MOIC 11,12" -> report ref_text "11,12" and the page.
+- Single refs like "1" or "12" in superscript/small font after a word or figure.
+- Asterisks (*) used as refs.
+Report each occurrence with its PAGE (1-based) and the EXACT reference text as it appears (e.g. "11,12", "11", "12", "*").
+Put them in "references" as an array: [{"page": 1, "ref_text": "11,12"}, {"page": 2, "ref_text": "3"}, ...].
+Include ALL such references; do not skip any. If none found, use "references": [].
 
-Respond with ONLY a JSON object (no markdown, no explanation). Format:
-{"1": "full text of footnote 1 here", "2": "full text of footnote 2 here", "*": "full text of asterisk footnote"}
-Use the exact label as key (e.g. "1", "2", "11", "*"). If no footnotes: {}}"""
+Do NOT include in references: plain body numbers that are data (percentages, amounts, list numbers). Only include numbers/asterisks that are clearly footnote markers (superscript or smaller than surrounding text).
+
+Respond with ONLY this JSON (no markdown, no other text):
+{"footnotes": {"1": "text", "11": "text"}, "references": [{"page": 5, "ref_text": "11,12"}, ...]}}"""
 
     try:
         initialize_gemini()
@@ -1318,85 +1329,25 @@ Use the exact label as key (e.g. "1", "2", "11", "*"). If no footnotes: {}}"""
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
         data = json.loads(raw)
-        if not isinstance(data, dict):
-            return {}
-        out = {}
-        for k, v in data.items():
-            if k and v is not None and isinstance(v, str) and v.strip():
-                out[str(k).strip()] = v.strip()
-        return out
-    except Exception as e:
-        print(f"LLM footnote section extraction error: {e}")
-        return {}
-
-
-def get_footnote_references_from_llm(pdf_bytes: bytes) -> List[Dict]:
-    """
-    Ask the LLM to identify footnote REFERENCES in the body only. Refs are validated later
-    against the document's footnote section (if any). Be conservative to avoid false positives.
-
-    Returns:
-        List of {"page": int, "ref_text": str} e.g. [{"page": 5, "ref_text": "11,12"}, ...]
-    """
-    if not settings.GEMINI_API_KEY or not pdf_bytes:
-        return []
-    import os
-    import tempfile
-    prompt = """You are analyzing a PDF document. The full PDF is attached so you can read every page.
-
-TASK: Find every footnote REFERENCE in the body (numbers or asterisks that point to footnotes). References often appear:
-- As SUPerscript (e.g. small raised "11,12" or Unicode superscript ¹¹,¹² after text like "Gross IRR / Net IRR" or "Gross MOIC / Net MOIC").
-- In tables: immediately after a metric name (e.g. "Net IRR¹¹,¹²" or "Net MOIC¹¹,¹²") – these ARE footnote refs; report them.
-- Comma-separated (e.g. "11,12", "1,2,3") or single numbers/asterisks in smaller or superscript style.
-
-Report refs as NORMAL digits in ref_text (e.g. "11,12" not "¹¹,¹²") so they can be validated. Include refs that appear as Unicode superscript digits (¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ⁰) – report them as "11", "12", etc.
-
-Do NOT report: percentages (28%), multipliers (1.6x), list/section numbers, years, or the footnote definitions at the bottom. Only report in-body references.
-
-For each reference, report PAGE (1-based) and ref_text as normal digits (e.g. "11,12").
-Respond with ONLY this JSON (no markdown):
-{"references": [{"page": 1, "ref_text": "11,12"}, ...]}
-If no footnote references found: {"references": []}}"""
-
-    try:
-        initialize_gemini()
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            tmp_file.write(pdf_bytes)
-            tmp_file_path = tmp_file.name
-        try:
-            uploaded_file = genai.upload_file(path=tmp_file_path, mime_type="application/pdf")
-            try:
-                response = model.generate_content(
-                    [prompt, uploaded_file],
-                    generation_config={"temperature": 0.0, "top_p": 0.95, "top_k": 40, "max_output_tokens": 4096}
-                )
-                raw = (response.text or "").strip()
-            finally:
-                try:
-                    genai.delete_file(uploaded_file.name)
-                except Exception:
-                    pass
-        finally:
-            if os.path.exists(tmp_file_path):
-                try:
-                    os.unlink(tmp_file_path)
-                except Exception:
-                    pass
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        data = json.loads(raw)
+        # Parse footnotes
+        fn_raw = data.get("footnotes")
+        footnotes_dict = {}
+        if isinstance(fn_raw, dict):
+            for k, v in fn_raw.items():
+                if k and v is not None and isinstance(v, str) and v.strip():
+                    footnotes_dict[str(k).strip()] = v.strip()
+        # Parse references
         refs = data.get("references") or []
-        out = []
+        out_refs = []
         for r in refs:
             page = r.get("page")
             ref_text = (r.get("ref_text") or "").strip()
             if page is not None and ref_text:
-                out.append({"page": int(page), "ref_text": ref_text})
-        return out
+                out_refs.append({"page": int(page), "ref_text": ref_text})
+        return footnotes_dict, out_refs
     except Exception as e:
-        print(f"LLM footnote reference detection error: {e}")
-        return []
+        print(f"LLM footnotes-and-references error: {e}")
+        return [], []
 
 
 def get_footnote_issues_from_llm(
@@ -1601,20 +1552,9 @@ def generate_analysis_result(
     if pdf_bytes:
         from app.services.footnotes import run_footnote_and_formatting_checks, find_ref_bbox_on_page
         _py_footnotes, footnote_locations, _fn_issues_python, color_issues, highlight_issues = run_footnote_and_formatting_checks(pdf_bytes)
-        # Use LLM to extract footnote section and references (like putting doc in chat), then validate
-        footnotes_dict = get_footnote_section_from_llm(pdf_bytes)
-        if not footnotes_dict and _py_footnotes:
-            footnotes_dict = _py_footnotes  # fallback to Python extraction if LLM returns empty
+        # Single LLM call with PDF (like checklist): get footnote section + all refs; no fallbacks
+        footnotes_dict, llm_refs = get_footnotes_and_references_from_llm(pdf_bytes)
         has_footnote_section = bool(footnotes_dict)
-        llm_refs = get_footnote_references_from_llm(pdf_bytes)
-        from app.services.footnotes import find_superscript_footnote_refs_in_pdf
-        python_refs = find_superscript_footnote_refs_in_pdf(pdf_bytes)
-        seen_ref_key = {(r["page"], r["ref_text"]) for r in llm_refs}
-        for r in python_refs:
-            key = (r["page"], r["ref_text"])
-            if key not in seen_ref_key:
-                seen_ref_key.add(key)
-                llm_refs = llm_refs + [r]
         footnote_issues_list = []
         for item in llm_refs:
             page_no = item.get("page", 1)

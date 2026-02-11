@@ -8,9 +8,6 @@ from typing import Dict, List, Optional, Tuple, Any
 # PyMuPDF annotation type for highlight (PDF_ANNOT_HIGHLIGHT = 8)
 PDF_ANNOT_HIGHLIGHT = 8
 
-# Unicode superscript digits -> normal digit (for ¹¹,¹² style refs)
-_SUPERSCRIPT_TO_NORMAL = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
-
 
 def extract_footnotes_from_pdf(pdf_bytes: bytes) -> Tuple[Dict[str, str], Dict[str, Dict[str, Any]]]:
     """
@@ -76,19 +73,11 @@ def extract_footnotes_from_pdf(pdf_bytes: bytes) -> Tuple[Dict[str, str], Dict[s
     return result, locations
 
 
-def _normalize_superscript_to_digits(s: str) -> str:
-    """Convert Unicode superscript digits (¹²³ etc.) to normal digits."""
-    if not s:
-        return s
-    return s.translate(_SUPERSCRIPT_TO_NORMAL)
-
-
 def _span_is_footnote_ref(span_text: str) -> Optional[str]:
     """
     Treat a span as a footnote reference if its entire text is a number or asterisks.
     This catches superscript/subscript refs (typically in a separate small span).
-    Supports Unicode superscript (¹¹, ¹²) by normalizing to digits.
-    Returns the reference string (e.g. "1", "12", "*") or None.
+    Returns the reference string (e.g. "1", "*") or None.
     """
     t = span_text.strip()
     if not t:
@@ -97,50 +86,7 @@ def _span_is_footnote_ref(span_text: str) -> Optional[str]:
         return t
     if re.fullmatch(r"\*+", t):
         return t
-    normalized = _normalize_superscript_to_digits(t)
-    if normalized and re.fullmatch(r"[\d,]+", normalized):
-        return normalized
     return None
-
-
-def find_superscript_footnote_refs_in_pdf(pdf_bytes: bytes) -> List[Dict[str, Any]]:
-    """
-    Scan the PDF for footnote references that appear as Unicode superscript (e.g. ¹¹,¹²)
-    or normal digits in small/superscript spans. Returns list of {"page": int, "ref_text": str}
-    with ref_text as normal digits (e.g. "11,12"). Only body text (above footnote area) is scanned.
-    """
-    import fitz
-    refs: List[Dict[str, Any]] = []
-    seen: set = set()
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            page_no = page_num + 1
-            page_height = page.rect.height
-            footnote_y_threshold = page_height * 0.75
-            blocks = page.get_text("dict").get("blocks", [])
-            for block in blocks:
-                if block.get("type") != 0:
-                    continue
-                bbox = block.get("bbox", (0, 0, 0, 0))
-                if bbox[1] >= footnote_y_threshold:
-                    continue
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        text = (span.get("text") or "").strip()
-                        ref = _span_is_footnote_ref(text)
-                        if ref is None:
-                            continue
-                        key = (page_no, ref)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        refs.append({"page": page_no, "ref_text": ref})
-        doc.close()
-    except Exception:
-        pass
-    return refs
 
 
 def check_footnote_references(
@@ -237,7 +183,7 @@ def find_ref_bbox_on_page(
                     size = span.get("size")
                     if size is not None:
                         sizes.append(float(size))
-                    if text == ref_text or _normalize_superscript_to_digits(text) == ref_text:
+                    if text == ref_text:
                         span_bbox = span.get("bbox")
                         if span_bbox:
                             candidate_bbox = list(span_bbox)
@@ -266,7 +212,7 @@ def find_ref_bbox_on_page(
                 for span in line.get("spans", []):
                     text = (span.get("text") or "").strip()
                     size = span.get("size")
-                    if text == ref_text or _normalize_superscript_to_digits(text) == ref_text:
+                    if text == ref_text:
                         span_bbox = span.get("bbox")
                         if span_bbox:
                             if small_threshold is None or (size is not None and float(size) <= small_threshold):
